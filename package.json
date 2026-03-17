@@ -12,10 +12,3 @@
     "axios": "^1.6.0"
   }
 }
-// ```
-
-// **4. On Render dashboard:**
-// - Go to your service → **Settings**
-// - Set **Build Command** to:
-// ```
-// npm install && npx puppeteer browsers install chrome
