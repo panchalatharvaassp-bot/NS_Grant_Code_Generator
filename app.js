@@ -12,6 +12,7 @@ const sessions = {};
 
 // Step 1: Start login flow
 app.post('/get-tokens', async (req, res) => {
+    console.log("Received /get-tokens request with body:", req.body);
   const CONFIG = req.body;
   const sessionId = randomUUID();
 
