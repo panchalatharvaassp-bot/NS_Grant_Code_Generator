@@ -25,10 +25,16 @@ app.post('/get-grant-code', async (req, res) => {
   try {
     console.log('[browser] Launching browser...');
     const browser = await puppeteer.launch({
-      args: chromium.args,
-      executablePath: await chromium.executablePath(),
-      headless: chromium.headless,
-    });
+  args: [
+    ...chromium.args,
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--disable-dev-shm-usage',
+    '--single-process',  // this fixes ETXTBSY on Render
+  ],
+  executablePath: await chromium.executablePath(),
+  headless: chromium.headless,
+});
     console.log('[browser] Launched');
 
     const page = await browser.newPage();
