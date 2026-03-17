@@ -1,5 +1,5 @@
 {
-  "name": "netsuite-oauth",
+  "name": "ns-grant-code-generator",
   "version": "1.0.0",
   "type": "module",
   "scripts": {
