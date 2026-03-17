@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: ns-grant-code-generator
+    env: node
+    buildCommand: npm install && npx puppeteer browsers install chrome
+    startCommand: npm start
