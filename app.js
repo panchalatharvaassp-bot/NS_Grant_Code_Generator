@@ -1,5 +1,6 @@
 import express from 'express';
-import puppeteer from 'puppeteer';
+import puppeteer from 'puppeteer-core';
+import chromium from '@sparticuz/chromium';
 import axios from 'axios';
 import { randomUUID } from 'crypto';
 
@@ -15,7 +16,12 @@ app.post('/get-tokens', async (req, res) => {
   const sessionId = randomUUID();
 
   try {
-    const browser = await puppeteer.launch({ headless: true });
+    const browser = await puppeteer.launch({
+      args: chromium.args,
+      executablePath: await chromium.executablePath(),
+      headless: chromium.headless,
+    });
+
     const page = await browser.newPage();
     let grantCode = null;
 
@@ -45,7 +51,6 @@ app.post('/get-tokens', async (req, res) => {
     if (page.url().includes('loginchallenge')) {
       console.log('🔐 2FA page reached, waiting for OTP...');
 
-      // Keep browser alive, store session
       sessions[sessionId] = {
         browser,
         page,
