@@ -3,12 +3,12 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "start": "node app.js",
-    "build": "npx puppeteer browsers install chrome"
+    "start": "node app.js"
   },
   "dependencies": {
     "express": "^4.18.2",
-    "puppeteer": "^21.0.0",
+    "puppeteer-core": "^21.0.0",
+    "@sparticuz/chromium": "^123.0.0",
     "axios": "^1.6.0"
   }
 }
