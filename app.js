@@ -8,43 +8,45 @@ const app = express();
 app.use(express.json());
 
 const sessions = {};
-const jobs = {}; // Store job status
+const jobs = {};
 
 app.get('/ping', (req, res) => {
   res.json({ status: 'awake' });
 });
 
-// Step 1: Start login flow — returns jobId IMMEDIATELY
 app.post('/get-tokens', async (req, res) => {
-  console.log('📥 /get-tokens request received');
+  console.log('[get-tokens] Request received');
+  console.log('[get-tokens] Request body:', JSON.stringify(req.body));
+
   const CONFIG = req.body;
   const jobId = randomUUID();
 
-  // Return jobId immediately before doing anything
   res.json({ status: 'processing', jobId });
-  console.log('✅ Returned jobId immediately:', jobId);
+  console.log('[get-tokens] Returned jobId immediately:', jobId);
 
-  // Run the actual work in background
   jobs[jobId] = { status: 'processing', createdAt: Date.now() };
 
   try {
-    console.log('🚀 Launching browser...');
+    console.log('[browser] Launching browser...');
     const browser = await puppeteer.launch({
       args: chromium.args,
       executablePath: await chromium.executablePath(),
       headless: chromium.headless,
     });
-    console.log('✅ Browser launched');
+    console.log('[browser] Browser launched successfully');
 
     const page = await browser.newPage();
+    console.log('[browser] New page created');
     let grantCode = null;
 
     await page.setRequestInterception(true);
+    console.log('[browser] Request interception enabled');
+
     page.on('request', (req) => {
       const url = req.url();
       if (url.startsWith(CONFIG.redirectUri)) {
         grantCode = new URL(url).searchParams.get('code');
-        console.log('✅ Grant code captured:', grantCode);
+        console.log('[grant] Grant code captured:', grantCode);
         req.abort();
       } else {
         req.continue();
@@ -52,21 +54,32 @@ app.post('/get-tokens', async (req, res) => {
     });
 
     const authUrl = `${CONFIG.authUrl}?response_type=code&redirect_uri=${encodeURIComponent(CONFIG.redirectUri)}&scope=${encodeURIComponent(CONFIG.scope)}&state=${CONFIG.state}&client_id=${CONFIG.clientId}`;
-    console.log('🌐 Navigating to auth URL...');
+    console.log('[browser] Navigating to auth URL:', authUrl);
     await page.goto(authUrl);
+    console.log('[browser] Auth URL loaded, current URL:', page.url());
 
+    console.log('[login] Waiting for email field...');
     await page.waitForSelector('#email');
-    console.log('⌨️ Entering credentials...');
+    console.log('[login] Email field found');
+
+    console.log('[login] Entering credentials...');
     await page.type('#email', CONFIG.nsEmail);
+    console.log('[login] Email entered');
     await page.type('#password', CONFIG.nsPassword);
+    console.log('[login] Password entered');
+
+    console.log('[login] Clicking login button...');
     await page.click('#login-submit');
+    console.log('[login] Login button clicked');
+
+    console.log('[login] Waiting for navigation...');
     await page.waitForNavigation({ waitUntil: 'networkidle0' }).catch((e) => {
-      console.log('⚠️ Navigation warning:', e.message);
+      console.log('[login] Navigation warning:', e.message);
     });
-    console.log('✅ Navigation complete, URL:', page.url());
+    console.log('[login] Navigation complete, URL:', page.url());
 
     if (page.url().includes('loginchallenge')) {
-      console.log('🔐 2FA detected, waiting for OTP...');
+      console.log('[2FA] Challenge page detected');
       const sessionId = randomUUID();
 
       sessions[sessionId] = {
@@ -77,32 +90,33 @@ app.post('/get-tokens', async (req, res) => {
         createdAt: Date.now(),
       };
 
-      // Update job status to otp_required
       jobs[jobId] = {
         status: 'otp_required',
         sessionId,
         createdAt: Date.now(),
       };
 
-      console.log('✅ Job updated to otp_required, sessionId:', sessionId);
+      console.log('[2FA] Job updated to otp_required, sessionId:', sessionId);
       return;
     }
 
-    // No 2FA
+    console.log('[login] No 2FA needed, waiting for redirect...');
     await new Promise(resolve => setTimeout(resolve, 3000));
     await browser.close();
+    console.log('[browser] Browser closed');
 
+    console.log('[token] Exchanging grant code for tokens...');
     const tokens = await getTokens(grantCode, CONFIG);
     jobs[jobId] = { status: 'success', tokens, createdAt: Date.now() };
-    console.log('✅ Tokens received, job complete');
+    console.log('[token] Tokens received, job complete');
 
   } catch (e) {
-    console.error('❌ Error in /get-tokens background:', e.message);
+    console.error('[get-tokens] Error:', e.message);
+    console.error('[get-tokens] Stack:', e.stack);
     jobs[jobId] = { status: 'error', error: e.message };
   }
 });
 
-// Step 2: NetSuite polls this to check job status
 app.get('/job-status/:jobId', (req, res) => {
   const { jobId } = req.params;
   const job = jobs[jobId];
@@ -111,68 +125,85 @@ app.get('/job-status/:jobId', (req, res) => {
     return res.status(404).json({ error: 'Job not found' });
   }
 
-  console.log('📊 Job status check:', jobId, '→', job.status);
+  console.log('[job-status] Job:', jobId, '-> Status:', job.status);
   return res.json(job);
 });
 
-// Step 3: Submit OTP
 app.post('/submit-otp', async (req, res) => {
-  console.log('📥 /submit-otp request received');
+  console.log('[submit-otp] Request received');
+  console.log('[submit-otp] Request body:', JSON.stringify(req.body));
+
   const { sessionId, otpCode } = req.body;
+  console.log('[submit-otp] Looking up session:', sessionId);
+
   const session = sessions[sessionId];
 
   if (!session) {
-    console.error('❌ Session not found:', sessionId);
+    console.error('[submit-otp] Session not found:', sessionId);
     return res.status(404).json({ error: 'Session not found or expired' });
   }
 
-  // Return immediately, process in background
+  console.log('[submit-otp] Session found');
+
   const jobId = randomUUID();
   jobs[jobId] = { status: 'processing', createdAt: Date.now() };
   res.json({ status: 'processing', jobId });
-  console.log('✅ Returned jobId immediately:', jobId);
+  console.log('[submit-otp] Returned jobId immediately:', jobId);
 
   const { browser, page, getGrantCode, CONFIG } = session;
 
   try {
+    console.log('[submit-otp] Waiting 2 seconds before entering OTP...');
     await new Promise(resolve => setTimeout(resolve, 2000));
 
-    console.log('⏳ Waiting for OTP input...');
+    console.log('[submit-otp] Waiting for OTP input field...');
     await page.waitForSelector('input[placeholder="6-digit code"]', { timeout: 10000 });
+    console.log('[submit-otp] OTP input field found');
+
+    console.log('[submit-otp] Entering OTP code:', otpCode);
     await page.click('input[placeholder="6-digit code"]');
     await page.type('input[placeholder="6-digit code"]', otpCode);
-    console.log('✅ OTP entered');
+    console.log('[submit-otp] OTP entered');
 
+    console.log('[submit-otp] Clicking trust device checkbox...');
     await page.click('#uif72');
-    console.log('✅ Checkbox clicked');
+    console.log('[submit-otp] Checkbox clicked');
 
+    console.log('[submit-otp] Clicking submit button...');
     await page.click('.n-loginchallenge-button');
-    console.log('✅ Submit clicked');
+    console.log('[submit-otp] Submit button clicked');
 
+    console.log('[submit-otp] Waiting for navigation...');
     await page.waitForNavigation({ waitUntil: 'networkidle0' }).catch((e) => {
-      console.log('⚠️ Navigation warning:', e.message);
+      console.log('[submit-otp] Navigation warning:', e.message);
     });
-    console.log('✅ URL after 2FA:', page.url());
+    console.log('[submit-otp] URL after 2FA:', page.url());
 
+    console.log('[submit-otp] Waiting 3 seconds...');
     await new Promise(resolve => setTimeout(resolve, 3000));
     await browser.close();
-    console.log('✅ Browser closed');
+    console.log('[browser] Browser closed');
 
     delete sessions[sessionId];
+    console.log('[submit-otp] Session cleaned up');
 
+    console.log('[token] Exchanging grant code for tokens...');
+    console.log('[token] Grant code:', getGrantCode());
     const tokens = await getTokens(getGrantCode(), CONFIG);
     jobs[jobId] = { status: 'success', tokens, createdAt: Date.now() };
-    console.log('✅ Tokens received, job complete');
+    console.log('[token] Tokens received, job complete');
 
   } catch (e) {
-    console.error('❌ Error in /submit-otp:', e.message);
+    console.error('[submit-otp] Error:', e.message);
+    console.error('[submit-otp] Stack:', e.stack);
     delete sessions[sessionId];
     jobs[jobId] = { status: 'error', error: e.message };
   }
 });
 
 async function getTokens(grantCode, CONFIG) {
-  console.log('🔄 Calling token endpoint, grant code:', grantCode);
+  console.log('[token] Calling NetSuite token endpoint...');
+  console.log('[token] Grant code:', grantCode);
   const response = await axios.post(
     CONFIG.tokenUrl,
     new URLSearchParams({
@@ -184,36 +215,25 @@ async function getTokens(grantCode, CONFIG) {
     }),
     { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
   );
-  console.log('✅ Token endpoint status:', response.status);
+  console.log('[token] Token endpoint responded with status:', response.status);
   return response.data;
 }
 
-// Clean up old jobs and sessions
 setInterval(() => {
   const now = Date.now();
   for (const [id, job] of Object.entries(jobs)) {
     if (now - job.createdAt > 10 * 60 * 1000) {
       delete jobs[id];
-      console.log('🧹 Cleaned up stale job:', id);
+      console.log('[cleanup] Stale job removed:', id);
     }
   }
   for (const [id, session] of Object.entries(sessions)) {
     if (now - session.createdAt > 5 * 60 * 1000) {
       session.browser.close();
       delete sessions[id];
-      console.log('🧹 Cleaned up stale session:', id);
+      console.log('[cleanup] Stale session removed:', id);
     }
   }
 }, 60 * 1000);
 
-app.listen(3000, () => console.log('🚀 Server running on port 3000'));
-```
-
-**The new flow:**
-```
-Suitelet → POST /get-tokens → gets jobId instantly
-Suitelet → polls GET /job-status/:jobId every 3 seconds
-              ↓ status: 'otp_required' → show OTP input to user
-Suitelet → POST /submit-otp → gets jobId instantly  
-Suitelet → polls GET /job-status/:jobId every 3 seconds
-              ↓ status: 'success' → show tokens
+app.listen(3000, () => console.log('[server] Running on port 3000'));
