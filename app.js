@@ -18,6 +18,7 @@ app.post('/get-grant-code', async (req, res) => {
   const CONFIG = req.body;
   const jobId = randomUUID();
 
+  // Return jobId immediately
   res.json({ status: 'processing', jobId });
   jobs[jobId] = { status: 'processing', createdAt: Date.now() };
 
@@ -28,6 +29,7 @@ app.post('/get-grant-code', async (req, res) => {
       executablePath: await chromium.executablePath(),
       headless: chromium.headless,
     });
+    console.log('[browser] Launched');
 
     const page = await browser.newPage();
     let grantCode = null;
@@ -59,18 +61,25 @@ app.post('/get-grant-code', async (req, res) => {
     console.log('[login] URL after login:', page.url());
 
     if (page.url().includes('loginchallenge')) {
-      console.log('[2FA] Challenge detected, saving session...');
+      console.log('[2FA] Challenge detected, waiting for OTP...');
       const sessionId = randomUUID();
-      sessions[sessionId] = { browser, page, getGrantCode: () => grantCode, createdAt: Date.now() };
+
+      sessions[sessionId] = {
+        browser,
+        page,
+        getGrantCode: () => grantCode,
+        createdAt: Date.now(),
+      };
+
       jobs[jobId] = { status: 'otp_required', sessionId, createdAt: Date.now() };
-      console.log('[2FA] Waiting for OTP, sessionId:', sessionId);
+      console.log('[2FA] Session saved:', sessionId);
       return;
     }
 
     await new Promise(resolve => setTimeout(resolve, 3000));
     await browser.close();
     jobs[jobId] = { status: 'success', grantCode, createdAt: Date.now() };
-    console.log('[grant] Job complete, grant code:', grantCode);
+    console.log('[grant] Job complete:', grantCode);
 
   } catch (e) {
     console.error('[get-grant-code] Error:', e.message);
@@ -103,9 +112,12 @@ app.post('/submit-otp', async (req, res) => {
 
   try {
     await new Promise(resolve => setTimeout(resolve, 2000));
+
     await page.waitForSelector('input[placeholder="6-digit code"]', { timeout: 10000 });
     await page.click('input[placeholder="6-digit code"]');
     await page.type('input[placeholder="6-digit code"]', otpCode);
+    console.log('[2FA] OTP entered');
+
     await page.click('#uif72');
     await page.click('.n-loginchallenge-button');
     await page.waitForNavigation({ waitUntil: 'networkidle0' }).catch((e) => {
@@ -128,6 +140,7 @@ app.post('/submit-otp', async (req, res) => {
   }
 });
 
+// Cleanup stale jobs and sessions
 setInterval(() => {
   const now = Date.now();
   for (const [id, job] of Object.entries(jobs)) {
